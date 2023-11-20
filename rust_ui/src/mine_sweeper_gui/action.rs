@@ -1,5 +1,6 @@
 #[derive(Debug, Clone)]
 pub enum Action {
+  CloseRequested,
   ButtonPress {
     button_id: String,
   },

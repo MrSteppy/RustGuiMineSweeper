@@ -20,7 +20,7 @@ mod render_state;
 #[derive(Debug)]
 pub struct MineSweeperGui {
   instruction_sender: Arc<Mutex<Option<Instruction>>>,
-  last_update_id: Option<u8>,
+  expected_update_id: Option<u8>,
   graphic_thread_join_handle: Option<JoinHandle<()>>,
   output_receiver: Receiver<Output>,
 }
@@ -36,7 +36,7 @@ impl MineSweeperGui {
 
     Self {
       instruction_sender,
-      last_update_id: Default::default(),
+      expected_update_id: Default::default(),
       graphic_thread_join_handle: Some(join_handle),
       output_receiver,
     }
@@ -50,10 +50,10 @@ impl MineSweeperGui {
 
   pub fn configure(&mut self, config: GuiConfig) {
     let update_id = self
-      .last_update_id
+      .expected_update_id
       .map(|id| id.wrapping_add(1))
       .unwrap_or_default();
-    self.last_update_id = Some(update_id);
+    self.expected_update_id = Some(update_id);
     self.send_instruction(Instruction::Configure { config, update_id })
   }
 
@@ -79,16 +79,19 @@ impl MineSweeperGui {
     loop {
       match self.output_receiver.try_recv() {
         Ok(output) => match output {
-          Output::Action(action) => {
-            if self.last_update_id.is_none() {
+          Output::Action {
+            action,
+            configuration_independent,
+          } => {
+            if configuration_independent || self.expected_update_id.is_none() {
               return Ok(Some(action));
             }
           }
           Output::Error { detail_message } => return Err(GraphicError { detail_message }),
           Output::UpdateAcknowledgement { update_id } => {
-            if let Some(expected_update_id) = &self.last_update_id {
+            if let Some(expected_update_id) = &self.expected_update_id {
               if update_id == *expected_update_id {
-                self.last_update_id = None;
+                self.expected_update_id = None;
               }
             } else {
               eprintln!("received update_id {} but didn't expect any", update_id)
@@ -110,9 +113,16 @@ enum Instruction {
 
 #[derive(Debug)]
 enum Output {
-  Action(Action),
-  Error { detail_message: String },
-  UpdateAcknowledgement { update_id: u8 },
+  Action {
+    action: Action,
+    configuration_independent: bool,
+  },
+  Error {
+    detail_message: String,
+  },
+  UpdateAcknowledgement {
+    update_id: u8,
+  },
 }
 
 #[derive(Debug)]
@@ -137,6 +147,6 @@ fn run_event_loop(
   event_loop.run(move |event, event_loop, control_flow| {
     control_flow.set_wait_timeout(Duration::from_millis(50)); //20 fps
 
-    todo!("check for new instruction and process event")
+    todo!("process event and check for new instruction")
   });
 }
