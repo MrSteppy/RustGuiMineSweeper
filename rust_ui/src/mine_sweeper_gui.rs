@@ -21,7 +21,7 @@ mod render_state;
 pub struct MineSweeperGui {
   instruction_sender: Arc<Mutex<Option<Instruction>>>,
   last_update_id: Option<u8>,
-  graphic_thread_join_handle: JoinHandle<()>,
+  graphic_thread_join_handle: Option<JoinHandle<()>>,
   output_receiver: Receiver<Output>,
 }
 
@@ -30,20 +30,20 @@ impl MineSweeperGui {
     let instruction_sender: Arc<Mutex<Option<Instruction>>> = Default::default();
     let instruction_receiver = instruction_sender.clone();
     let (output_sender, output_receiver) = channel();
-    let graphic_thread_join_handle = thread::spawn(move || {
+    let join_handle = thread::spawn(move || {
       run_event_loop(instruction_receiver, output_sender);
     });
 
     Self {
       instruction_sender,
       last_update_id: Default::default(),
-      graphic_thread_join_handle,
+      graphic_thread_join_handle: Some(join_handle),
       output_receiver,
     }
   }
 
   fn send_instruction(&self, instruction: Instruction) {
-    if let Ok(channel) = self.instruction_sender.lock() {
+    if let Ok(mut channel) = self.instruction_sender.lock() {
       *channel = Some(instruction);
     } //panics will be caught when fetching actions
   }
@@ -66,11 +66,13 @@ impl MineSweeperGui {
   }
 
   pub fn fetch_next_action(&mut self) -> Result<Option<Action>, GraphicError> {
-    if self.graphic_thread_join_handle.is_finished() {
-      if let Err(e) = self.graphic_thread_join_handle.join() {
-        Err(GraphicError {
-          detail_message: format!("graphic thread panicked: {:?}", e),
-        })?
+    if let Some(join_handle) = &self.graphic_thread_join_handle {
+      if join_handle.is_finished() {
+        if let Err(e) = self.graphic_thread_join_handle.take().unwrap().join() {
+          return Err(GraphicError {
+            detail_message: format!("graphic thread panicked: {:?}", e),
+          });
+        }
       }
     }
 
