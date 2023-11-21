@@ -6,12 +6,14 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use winit::event_loop::EventLoop;
+use winit::event::{ElementState, Event, MouseButton, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
 
 use action::Action;
 use render_state::RenderState;
 
 use crate::mine_sweeper_gui::gui_config::GuiConfig;
+use crate::mine_sweeper_gui::render_state::ClickableElement;
 
 pub mod action;
 pub mod gui_config;
@@ -31,12 +33,12 @@ impl MineSweeperGui {
     let instruction_receiver = instruction_sender.clone();
     let (output_sender, output_receiver) = channel();
     let join_handle = thread::spawn(move || {
-      run_event_loop(instruction_receiver, output_sender);
+      run_event_loop(instruction_receiver, output_sender, 20);
     });
 
     Self {
       instruction_sender,
-      expected_update_id: Default::default(),
+      expected_update_id: None,
       graphic_thread_join_handle: Some(join_handle),
       output_receiver,
     }
@@ -104,6 +106,12 @@ impl MineSweeperGui {
   }
 }
 
+impl Drop for MineSweeperGui {
+  fn drop(&mut self) {
+    self.send_instruction(Instruction::ShutDown)
+  }
+}
+
 #[derive(Debug)]
 enum Instruction {
   Configure { config: GuiConfig, update_id: u8 },
@@ -138,15 +146,112 @@ impl Display for GraphicError {
 
 impl Error for GraphicError {}
 
-fn run_event_loop(
+fn run_event_loop<F: Into<Option<u32>>>(
   instruction_receiver: Arc<Mutex<Option<Instruction>>>,
   output_sender: Sender<Output>,
+  default_fps: F,
 ) {
   let event_loop = EventLoop::new();
-  let mut render_state: Option<RenderState> = None;
+  let default_control_flow = {
+    let mut flow = ControlFlow::Poll;
+    if let Some(fps) = default_fps.into() {
+      flow.set_wait_timeout(Duration::from_secs_f64(1.0 / fps as f64))
+    }
+    flow
+  };
+  let mut render_state: Option<(RenderState, GuiConfig)> = None;
+  let receive_instruction = move || {
+    instruction_receiver
+      .lock()
+      .ok()
+      .and_then(|mut channel| channel.take())
+  };
+  let mut last_cursor_pos: Option<(usize, usize)> = None;
   event_loop.run(move |event, event_loop, control_flow| {
-    control_flow.set_wait_timeout(Duration::from_millis(50)); //20 fps
+    *control_flow = default_control_flow;
 
-    todo!("process event and check for new instruction")
+    let mut send_output = |output| {
+      if let Err(_) = output_sender.send(output) {
+        eprintln!("gui handle has gone out of scope without shutting down graphic thread");
+        control_flow.set_exit();
+      }
+    };
+
+    match event {
+      Event::WindowEvent { event, .. } => {
+        if let Some((render_state, _)) = &render_state {
+          match event {
+            WindowEvent::CloseRequested => send_output(Output::Action {
+              action: Action::CloseRequested,
+              configuration_independent: true,
+            }),
+            WindowEvent::MouseInput {
+              state: ElementState::Pressed,
+              button: button @ (MouseButton::Left | MouseButton::Right),
+              ..
+            } => {
+              if let Some((px, py)) = last_cursor_pos {
+                if let Some(element) = render_state.element_at(px, py) {
+                  send_output(Output::Action {
+                    action: match element {
+                      ClickableElement::GridTile {
+                        coordinates: (x, y),
+                      } => Action::TileClick {
+                        x,
+                        y,
+                        alternate_click: button != MouseButton::Left,
+                      },
+                      ClickableElement::Button { id } => Action::ButtonPress { button_id: id },
+                    },
+                    configuration_independent: false,
+                  })
+                }
+              }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+              last_cursor_pos = Some((position.x as usize, position.y as usize));
+            }
+            WindowEvent::CursorLeft { .. } => {
+              last_cursor_pos = None;
+            }
+            _ => {}
+          }
+        }
+      }
+      Event::MainEventsCleared => {
+        //check for new instruction
+        if let Some(new_instruction) = receive_instruction() {
+          match new_instruction {
+            Instruction::Configure {
+              config: new_config,
+              update_id,
+            } => {
+              if let Some((_, config)) = &mut render_state {
+                *config = new_config;
+              } else {
+                match RenderState::new(&new_config, event_loop) {
+                  Ok(state) => render_state = Some((state, new_config)),
+                  Err(detail_message) => send_output(Output::Error { detail_message }),
+                }
+              }
+
+              send_output(Output::UpdateAcknowledgement { update_id });
+            }
+            Instruction::CloseWindow => render_state = None,
+            Instruction::ShutDown => control_flow.set_exit(),
+          }
+        }
+      }
+      Event::RedrawRequested(_) => {
+        if let Some((render_state, config)) = &mut render_state {
+          if let Err(detail_message) = render_state.render(config) {
+            send_output(Output::Error {
+              detail_message: format!("render failure: {}", detail_message),
+            });
+          }
+        }
+      }
+      _ => {}
+    }
   });
 }

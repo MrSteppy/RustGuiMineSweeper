@@ -14,6 +14,7 @@ pub struct Button {
   pub id: String,
   pub color: Option<Color>,
   pub label: Vec<LabelPart>,
+  pub click_able: bool,
 }
 
 impl Button {
@@ -21,11 +22,13 @@ impl Button {
     id: S,
     color: C,
     label: L,
+    click_able: bool,
   ) -> Self {
     Button {
       id: id.to_string(),
       color: color.into(),
       label: label.into().into_iter().map(|p| p.into()).collect(),
+      click_able,
     }
   }
 

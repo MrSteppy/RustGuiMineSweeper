@@ -13,9 +13,22 @@ pub(super) struct RenderState {
 }
 
 impl RenderState {
-  pub fn new(config: &GuiConfig, event_loop: &EventLoopWindowTarget<()>) -> Self {
+  pub fn new(config: &GuiConfig, event_loop: &EventLoopWindowTarget<()>) -> Result<Self, String> {
     todo!()
   }
+
+  pub fn element_at(&self, px: usize, py: usize) -> Option<ClickableElement> {
+    todo!()
+  }
+
+  pub fn render(&mut self, config: &GuiConfig) -> Result<(), String> {
+    todo!()
+  }
+}
+
+pub enum ClickableElement {
+  GridTile { coordinates: (usize, usize) },
+  Button { id: String },
 }
 
 pub struct Rect {
